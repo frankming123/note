@@ -1,0 +1,276 @@
+# MySQL基础命令
+
+<!-- TOC -->
+
+- [MySQL基础命令](#mysql基础命令)
+    - [初始化,启动,关闭,连接,测试MySQL服务器](#初始化启动关闭连接测试mysql服务器)
+        - [初始化MySQL数据库](#初始化mysql数据库)
+        - [启动数据库](#启动数据库)
+        - [连接MySQL服务器](#连接mysql服务器)
+        - [测试MySQL服务器](#测试mysql服务器)
+        - [关闭MySQL服务器](#关闭mysql服务器)
+    - [MySQL日志](#mysql日志)
+    - [善用MySQL的帮助命令help](#善用mysql的帮助命令help)
+    - [修改MySQL用户密码](#修改mysql用户密码)
+    - [找回丢失的MySQL root用户密码](#找回丢失的mysql-root用户密码)
+    - [SQL结构化查询语言](#sql结构化查询语言)
+        - [SQL是什么](#sql是什么)
+        - [SQL的分类](#sql的分类)
+        - [常用的SQL操作](#常用的sql操作)
+
+<!-- /TOC -->
+
+## 初始化,启动,关闭,连接,测试MySQL服务器
+
+### 初始化MySQL数据库
+
+    ]# mkdir /data
+    ]# chown mysql:mysql /data
+    ]# chmod 750 /data
+    ]# mysqld --initialize --user=mysql
+
+mysqld会依据其配置文件的datadir选项初始化数据目录(数据目录不存在则mysqld会创建它,数据目录不为空则报错)
+
+配置文件编译时指定,默认是/etc/my.cnf
+
+--initialize也可换成--initialize-insecure,那样mysqld不会在初始化数据库时为root分配随机密码
+
+如果mysqld不能识别正确的安装目录和数据目录,可以手动指定:--basedir=...,--datadir=...
+
+也可将其写在配置文件中.可手动指定配置文件:--defaults-file=...
+
+### 启动数据库
+
+可以通过mysqld_safe的方式启动数据库
+
+    ]# mysqld_safe --user=mysql &
+
+但使用rpm包安装MySQL时,由于更推荐用systemd启动,所以mysqld_safe并没有安装
+
+    ]# systemctl start mysqld
+
+不过即使有systemd,也可以通过mysqld启动
+
+    ]# mysqld --user=mysql &
+
+### 连接MySQL服务器
+
+如果之前使用--initialize初始化数据库,则需要先去/var/log/mysqld.log日志文件中查找密码,然后再连接MySQL服务器
+
+而若之前使用--initialize-insecure初始化数据库的话,则无需密码
+
+    ]# mysql -uroot -p
+
+连接后,给root指定一个新的密码
+
+    mysql> ALTER USER 'root'@'localhost' IDENTIFIED BY 'new_password';
+
+### 测试MySQL服务器
+
+在初始化数据库并且启动MySQL服务器后,可以做几个简单的测试来确认MySQL是否正常工作
+
+确认MySQL的版本
+
+    ]# mysqladmin -uroot -p version
+
+确认是否能关闭MySQL
+
+    ]# mysqladmin -uroot -p shutdown
+
+确认是否能再次开启MySQL
+
+    ]# mysqld --user=mysql &
+
+查看MySQL有哪些数据库
+
+    ]# mysqlshow -uroot -p
+
+查看MySQL指定数据库中有哪些表,如mysql
+
+    ]# mysqlshow -uroot -p mysql
+
+也可以查看指定表中的信息
+
+    ]# mysql -uroot -p -e "SELECT User, Host, plugin, authentication_string FROM mysql.user" mysql
+
+### 关闭MySQL服务器
+
+关闭MySQL服务器可以使用mysqladmin命令
+
+    ]# mysqladmin -uroot -p shutdown
+
+如果系统使用systemd,也可以通过systemd关闭MySQL
+
+    ]# systemctl stop mysqld
+
+最后,也可强制关闭MySQL
+
+    ]# killall mysqld
+    ]# pkill mysqld
+    ]# pgrep mysqld | xargs kill
+
+## MySQL日志
+
+在有syslog的系统中,MySQL的运行日志一般在/var/log目录下,可能是messages文件,也可能是mysqld.log文件
+
+MySQL默认也有mysql_history文件,用于记录登录MySQL服务器后使用的SQL语句,类似于bash_history.该文件位于登录用户的家目录中,即~/.mysql_history
+
+## 善用MySQL的帮助命令help
+
+要想查看MySQL中的命令使用语法,就需要用help,help后面接相关命令及命令组合即可,如:help create
+
+## 修改MySQL用户密码
+
+MySQL的密码存在mysql数据库的user表的authentication_string字段中,因此可以直接修改该字段来修改用户密码
+
+    mysql> update user set authentication_string=password('123456') where User='root';
+
+MySQL提供了set password来更快捷的修改用户密码.忽略for选项则默认修改当前用户密码;MySQL不推荐使用password()选项,直接输入密码参数已经默认加密
+
+    mysql> set password for 'root'@'localhost'=password('123456');
+
+在MySQL5.7及之后的版本,官方推荐使用alter user的方式修改密码
+
+    mysql> alter user 'root'@'localhost' identified by '123456';
+
+事实上,也可以在命令行外修改MySQL用户密码
+
+    ]# mysqladmin -uroot -p'123456' password '1234567'
+
+## 找回丢失的MySQL root用户密码
+
+1. 停止MySQL进程
+
+        ]# killall mysqld
+
+2. 使用--skip-grant-tables启动mysql,忽略授权登录验证
+
+        ]# mysqld --skip-grant-tables --user=mysql &
+
+3. 登录MySQL服务器,并修改root用户密码
+
+    需要注意的是,此时只能通过update表来修改用户密码,其余方法均失效
+
+        ]# mysql
+        mysql> update user set authentication_string=password('123456') where User='root' and Host='localhost';
+
+4. 重启MySQL服务器,使用密码正常登录
+
+        ]# mysqladmin -uroot -p shutdown
+        ]# mysqld --user=mysql &
+
+## SQL结构化查询语言
+
+### SQL是什么
+
+SQL全称Structured Query Language,即结构化查询语言,它是一种对关系型数据库中的数据进行定义和操作的语言
+
+### SQL的分类
+
+SQL结构化查询语言包含6个部分
+
+1. 数据查询语言(DQL,Data Query Language)
+
+    DQL用于从表中获取数据,确定数据怎样在应用程序给出
+
+    DQL的关键字为select,往往和where, order by, group by和having等关键字一起使用
+
+2. 数据操作语言(DML,Data Manipulation Language)
+
+    DML包括关键字insert,update和delete.它们分别用于添加,修改和删除表中的行
+
+3. 事务处理语言(TPL)
+
+    它的语句能确保被DML语句影响的表的所有行及时得以更新
+
+    TPL包括关键字begin transaction,commit和rollback
+
+4. 数据控制语言(DCL,Data Control Language)
+
+    对用户进行权限或角色的授予与收回
+
+    DCL包含关键字grant,revoke
+
+5. 数据定义语言(DDL,Data Definition Language)
+
+    可用于在数据库中创建或删除表,为表加入索引等
+
+    DDL包含关键字create,drop,alter等
+
+6. 指针控制语言(CCL,Cursor Control Language)
+
+    用于对一个或多个表进行单独行的操作
+
+    DDL包含关键字declare cursor,fetch into和update where current等
+
+### 常用的SQL操作
+
+1. 创建数据库
+
+    命令语法:CREATE DATABASE [IF NOT EXISTS] db_name (CHARACTER SET utf8 COLLATE utf8_general_ci)
+
+    示例:
+
+        mysql> create database test;
+        mysql> show create database test\G; //查看创建test数据库的语句,可以看到默认添加了字符集和校对集
+
+2. 查看数据库
+
+    命令语法:SHOW DATABASES [LIKE 'pattern' | WHERE expr]
+
+    示例:
+
+        mysql> show databases like 'my%';
+
+3. 删除数据库
+
+    命令语法:DROP DATABASE [IF EXISTS] db_name
+
+    示例:
+
+        mysql> drop database if exists test;
+
+4. 选定数据库
+
+    命令语法:USE db_name
+
+    示例:
+
+        mysql> use test;
+
+5. 查看当前选定的数据库,版本,用户,时间等
+
+    命令语法:SELECT function()
+
+    MySQL内置了一些函数可供调用,如database(),version(),user(),now()
+
+6. 当前数据库包含的表信息
+
+    命令语法:SHOW [FULL] TABLES
+    [{FROM | IN} db_name]
+    [LIKE 'pattern' | WHERE expr]
+
+    示例:
+
+        mysql> show tables;
+        mysql> show tables like 'user';
+        mysql> show tables from test;
+
+7. 删除MySQL的多余账号
+
+    命令语法:DROP USER [IF EXISTS] user [, user] ...
+
+    示例:
+
+        mysql> drop user 'staight'@'localhost';
+
+8. 创建MySQL用户及赋予用户权限
+
+    创建MySQL用户的命令语法:CREATE USER [IF NOT EXISTS] user [IDENTIFIED BY password]
+
+    创建并授权的命令语法:GRANT priv_type ON priv_level TO user [IDENTIFIED BY password] [WITH {GRANT OPTION ...]
+
+    示例:
+
+        mysql> create user 'staight'@'localhost' identified by '123456';
+        mysql> grant all on test.* to user 'staight'@'localhost' identified by '123456';
