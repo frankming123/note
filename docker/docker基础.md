@@ -39,7 +39,7 @@ Fedora上的安装方法:
 
     由于docker hub的服务器在国外,下载镜像非常慢,可以使用国内的镜像服务进行加速,例如阿里云
 
-    ![alispeed](alispeed.png)
+    ![alispeed](images/alispeed.png)
 
 4. 启用docker daemon
 
