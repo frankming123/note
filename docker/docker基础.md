@@ -12,7 +12,19 @@
         - [镜像的内部结构](#镜像的内部结构)
         - [base镜像](#base镜像)
         - [镜像的分层结构](#镜像的分层结构)
-    - [Docker命令](#docker命令)
+        - [容器层与镜像层](#容器层与镜像层)
+        - [构建镜像](#构建镜像)
+        - [镜像的缓存特性](#镜像的缓存特性)
+        - [调试Dockerfile](#调试dockerfile)
+        - [镜像命名](#镜像命名)
+    - [docker容器](#docker容器)
+        - [如何运行容器](#如何运行容器)
+        - [进入容器的方法](#进入容器的方法)
+        - [容器常用操作](#容器常用操作)
+        - [容器操作图解](#容器操作图解)
+        - [限制容器的资源](#限制容器的资源)
+        - [实现容器的底层技术](#实现容器的底层技术)
+    - [Docker网络](#docker网络)
 
 <!-- /TOC -->
 
@@ -151,10 +163,219 @@ CentOS镜像的Dockerfile的内容:
 
 ### 镜像的分层结构
 
-## Docker命令
+docker支持通过扩展现有镜像,创建新的镜像
 
-docker pull [OPTIONS] NAME[:TAG|@DIGEST]:从一个registry上下载一个镜像或者仓库
+Dockerfile示例:
 
-docker images [OPTIONS] [REPOSITORY[:TAG]]:列出镜像
+    FROM debian
+    RUN apt-get install emacs
+    RUN apt-get install apache2
+    CMD ["/bin/bash"]
 
-docker run [OPTIONS] IMAGE [COMMAND] [ARG...]:在一个新的容器中运行一个命令
+![Dockerfile](images/Dockerfile.png)
+
+通过分层结构,多个镜像可以共享资源
+
+### 容器层与镜像层
+
+当容器启动时,一个新的可写层被加载到镜像的顶部.这一层通常被称作容器层,容器层之下都叫镜像层
+
+![container_image_layer](images/container_image_layer.png)
+
+所有对容器的改动都只会发生在容器层中
+
+只有容器层是可写的,容器层下面的所有镜像层都是只读的
+
+镜像层数量可能会很多,所有镜像层会联合在一起组成一个统一的文件系统.如果不同层中有一个相同路径的文件,比如/a,上层的/a会覆盖下层的/a,也就是说用户只能访问到上层中的文件/a.在容器层中,用户看到的是一个叠加之后的文件系统
+
+1. 添加文件
+
+    在容器中创建文件时,新文件被添加到容器层中
+
+2. 读取文件
+
+    在容器中读取某个文件时,Docker会从上往下依次在各镜像层中查找此文件.一旦找到,立即将其复制到容器层,然后打开并读入内存
+
+3. 修改文件
+
+    在容器中修改已存在的文件时,Docker会从上往下依次在各镜像层中查找此文件.一旦找到,立即将其复制到容器层,然后修改之
+
+4. 删除文件
+
+    在容器中删除文件时,Docker也是从上往下依次在镜像层中查找此文件.找到后,会在容器层中记录下此删除操作
+
+只有当需要修改时才复制一份数据,这种特性被称作Copy-on-Write.可见,容器层保存的是镜像变化的部分,不会对镜像本身进行任何修改
+
+### 构建镜像
+
+Docker提供了两种构建镜像的方法:
+
+1. docker commit命令
+2. Dockerfile构建镜像
+
+- docker commit
+
+    docker commit是创建新镜像最直观的方法,其过程包括:
+
+    1. 运行容器
+    2. 修改容器
+    3. 将容器保存为新的镜像
+
+    示例:
+
+        ]# docker run -it ubuntu
+        ]# apt-get install -y vim
+        ]# docker commit silly_goldberg ubuntu-with-vi
+
+- Dockerfile构建镜像
+
+    Dockerfile示例:
+
+        FROM ubuntu
+        RUN apt-get update && apt-get install -y vim
+
+    使用Dockerfile构建:
+
+        ]# ls
+        Dockerfile
+        ]# docker build -t ubuntu-with-vi-dockerfile .
+
+    构建后可以通过docker images查看新的镜像
+
+###　镜像的缓存特性
+
+Docker会缓存已有镜像的镜像层.构建新镜像时,如果某镜像层已经存在,就直接使用,无需重新创建
+
+Dockerfile中每一个指令都会创建一个镜像层,上层是依赖于下层的.无论什么时候,只要某一层发生变化,其上面所有层的缓存都会失效
+
+### 调试Dockerfile
+
+Dockerfile构建镜像的中途可能会出错,此时Docker所创建的临时容器依旧保留着
+
+如果想要调试Dockerfile,可以进入临时容器中查看信息
+
+### 镜像命名
+
+一个特定镜像的名字由两部分组成:repository和tag
+
+如果执行docker buil时没有使用指定tag,会使用默认值latest
+
+tag除了标识一个镜像外,没有什么特殊的含义
+
+## docker容器
+
+### 如何运行容器
+
+运行容器一般使用docker run命令
+
+可用三种方式指定容器启动时执行的命令:
+
+1. CMD指令
+2. ENDPOINT指令
+3. 在docker run命令行中指定
+
+容器在执行完指令后会自动退出.如果想要容器保持running,则需要一直执行的命令
+
+### 进入容器的方法
+
+有两种方法可以进入容器:attach和exec
+
+- docker attach
+
+    通过docker attach可以attach到容器启动命令的终端
+
+- docker exec
+
+    在容器中打开新的终端,并连接至该终端
+
+attch与exec主要区别:
+
+1. attach直接进入容器启动命令的终端,不会启动新的进程
+2. exec则是在容器中打开新的终端,并且可以启动新的进程
+
+attach命令可以查看启动命令的输出,当然docker logs也可以做到这一点
+
+如果没有什么特殊情况,一般使用exec命令
+
+### 容器常用操作
+
+- stop/start/restart容器
+
+    通过docker stop可以停止运行的容器
+
+    stop本质上是向该进程发送一个SIGTERM信号.如果想强制停止容器,可以使用docker kill命令,其作用是向容器进程发送SIGKILL信号
+
+    对于处于停止状态的容器,可以通过docker start重新启动.start会保留容器的第一次启动时的所有参数
+
+    docker restart可以重启容器,相当于依次执行stop和start
+
+    对于服务类容器,还可以在其运行时添加--restart=always参数使其在退出时自动重启
+
+- pause/unpause容器
+
+    pause可以使容器处于暂停状态,其内存和硬盘数据依旧保持存在.而stop命令则无法保持其内存数据
+
+    unpause用来恢复处于暂停状态的容器
+
+- 删除容器
+
+    使用docker一段使用后,host上可能会有大量已经退出了的容器
+
+    这些容器依然会占用host上的存储资源,如果确认不会再重启此类容器,可以通过docker rm删除
+
+    移除所有容器:
+
+        ]# docker rm -v $(docker ps -aq -f status=exited)
+
+### 容器操作图解
+
+![container_perform](images/container_perform.png)
+
+### 限制容器的资源
+
+- 内存限额
+
+    在创建docker容器时,可以加上-m和--memory-swap参数来控制容器内存的使用量
+
+    官方的progrium/stress镜像非常适合测试容器的计算,存储资源
+
+- CPU限制
+
+    Docker可以通过-c或--cpu-shares设置容器使用CPU的权重.如果不指定,默认值是1024
+
+    与内存限额不同,通过-c设置的cpu share并不是CPU资源的绝对数量,而是一个相对的权重值.某个容器最终能分配到的CPU资源取决于它的cpu share占所有容器cpu share总和的比例
+
+- Block IO限制
+
+    Block IO指的是磁盘的读写,docker可通过设置权重,限制bps和iops的方式控制容器读写磁盘的带宽
+
+    --blkio-weight可用来改变容器block IO的优先级(10-1000)
+
+    bps是byte per second,每秒读写的数据量;iops是io per second,每秒IO的次数
+
+    可以通过以下参数控制容器的bps和iops:
+
+    - --device-read-bps,限制读某个设备的bps
+    - --device-write-bps,限制写某个设备的bps
+    - --device-read-iops,限制读某个设备的iops
+    - --device-write-iops,限制写某个设备的iops
+
+### 实现容器的底层技术
+
+cgroup和namespace是最重要的两种技术.cgroup实现资源限额,namespace实现资源隔离
+
+- cgroup
+
+    cgroup全称Control Group.Linux操作系统通过cgroup可以设置进程使用CPU,内存和IO资源的限额
+
+    在/sys/fs/cgroup中可以找到docker对容器的限额
+
+- namespace
+
+    namespace管理着host中全局唯一的资源,并可以让每个容器都觉得只有自己在使用它.换句话说,namespace实现了容器间资源的隔离
+
+    Linux使用了六种namespace,分别对应六种资源:Mount,UTS,IPC,PID,Network和User
+
+## Docker网络
+
+Docker安装时会自动在host上创建3个网络:bridge,host,none,可用docker network ls命令查看
