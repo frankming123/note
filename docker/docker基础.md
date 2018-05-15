@@ -25,6 +25,13 @@
         - [限制容器的资源](#限制容器的资源)
         - [实现容器的底层技术](#实现容器的底层技术)
     - [Docker网络](#docker网络)
+        - [Docker网络类型](#docker网络类型)
+        - [容器间通信的方式](#容器间通信的方式)
+        - [容器与外部世界通信](#容器与外部世界通信)
+    - [Docker存储](#docker存储)
+        - [两类存储资源](#两类存储资源)
+        - [共享数据](#共享数据)
+        - [volume生命周期管理](#volume生命周期管理)
 
 <!-- /TOC -->
 
@@ -378,4 +385,271 @@ cgroup和namespace是最重要的两种技术.cgroup实现资源限额,namespace
 
 ## Docker网络
 
+### Docker网络类型
+
 Docker安装时会自动在host上创建3个网络:bridge,host,none,可用docker network ls命令查看
+
+- none网络
+
+    none网络即没有网络,挂在这个网络下的容器除了lo,没有其他任何网卡
+
+    容器创建时可以使用--network=none指定使用none网络
+
+    一般对安全性要求高且不需要联网的应用可以使用none网络
+
+- host网络
+
+    连接到host网络的容器共享Docker host的网络栈,容器的网络配置与host完全一样
+
+    可以通过--network=host指定使用host网络
+
+    对网络传输效率有较高要求的应用可以使用host网络,不过要考虑端口冲突问题
+
+- bridge网络
+
+    bridge网络是创建容器时的默认网络
+
+    Docker安装时会创建一个命名为docker0的linux bridge,如果不指定--network,创建的容器默认都会挂到docker0上
+
+    容器的网络拓扑:
+
+    ![bridge](images/bridge.png)
+
+- 自定义容器网络
+
+    除了none,host,bridge这三个自动创建的网络,用户也可以根据需要创建user-defined网络
+
+    Docker提供三种user-defined网络驱动:bridge,overlay 和macvlan
+
+    可以通过bridge驱动创建类似默认的bridge网络
+
+        ]# docker network create -d bridge --subnet 172.22.16.0/24 --gateway 172.22.16.1 my_net
+
+    容器创建时可以用--network参数指定新的网络.不过只有使用--subnet创建的网络才允许容器创建时使用--ip参数指定一个静态ip
+
+    ![bridge2](images/bridge2.png)
+
+### 容器间通信的方式
+
+- IP通信
+
+    由于Docker设置iptables的drop策略,两个容器要能通信,必须要有属于同一个网络的网卡
+
+    可以通过--network以及docker network connect将容器加入到指定网络
+
+- Docker DNS Server
+
+    通过ip访问容器可能无法确定ip,不够灵活.可以通过docker自带的DNS服务解决
+
+    docker daemon实现了一个内嵌的DNS server,使容器可以直接通过"容器名"通信.方法很简单,只要在启动时用--name为容器命名就可以了.不过只能在user-defined网络中使用
+
+        ]# docker run -it --name=busybox1 --network=my_net busybox
+        ]# docker run -it --name=busybox2 --network=my_net busybox
+        ]# ping -c1 busybox1
+
+- joined容器
+
+    joined容器非常特别,它可以使两个或多个容器共享一个网络栈,共享网卡和配置信息,joined容器之间可以通过127.0.0.1直接通信
+
+    首先需要先创建一个容器:
+
+        ]# docker run -d --name=httpd httpd
+        ]# docker run -it --network=container:httpd busybox
+        ]# wget 127.0.0.1 && cat index.html
+        <html><body><h1>It works!</h1></body></html>
+
+    joined容器非常适合不同容器中的程序通过loopback高效通信,例如web server和app server,也适合容器网络流量的监控
+
+### 容器与外部世界通信
+
+- 容器访问外部世界
+
+    默认情况下,容器可以访问外网
+
+    在bridge网络下,容器使用的是私有地址(172.17.0.0/16),容器通过NAT连通外网
+
+        ]# iptables -t nat -S
+        -A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE
+
+    从docker内部到外网的过程:
+
+    ![snat](images/snat.png)
+
+    1. busybox发送ping包:172.17.0.2 > www.bing.com
+    2. docker0收到包,发现是发送到外网的,交给NAT处理
+    3. NAT将源地址换成enp0s3的IP:10.0.2.15 > www.bing.com
+    4. ping包从enp0s3发送出去,到达www.bing.com
+
+- 外部世界访问容器
+
+    外部世界访问容器的方法是端口映射
+
+    docker可将容器对外提供服务的端口映射到host的某个端口,外网通过该端口访问容器.容器启动时通过-p参数映射端口
+
+    以0.0.0.0:32773->80/tcp为例分析整个过程:
+
+    ![dnat](images/dnat.png)
+
+    1. docker-proxy监听host的32773端口
+    2. 当curl访问10.0.2.15:32773时,docker-proxy转发给容器172.17.0.2:80
+    3. httpd容器响应请求并返回结果
+
+## Docker存储
+
+### 两类存储资源
+
+Docker为容器提供了两类存放数据的资源:
+
+1. 由storage driver管理的镜像层和容器层
+2. Data Volume
+
+- storage driver
+
+    容器由最上面一个可写的容器层,以及若干只读的镜像层组成,容器的数据就存放在这些层中.这样的分层结构最大的特性是Copy-on-Write
+
+    分层结构使镜像和容器的创建,共享以及分发变得非常高效,而这些都要归功于Docker storage driver.正是storage driver实现了多层数据的堆叠并为用户提供一个单一的合并之后的统一视图
+
+    Docker支持多种storage driver,有AUFS,Device Mapper,Btrfs,OverlayFS,VFS和ZFS.它们都能实现分层的架构,同时又有各自的特性.Docker优先使用Linux发行版默认的storage driver
+
+    可以运行docker info查看系统的默认driver
+
+    对于那些无状态的应用,直接使用storage driver存放数据是一个很好的选择,因为它们没有需要持久化的数据
+
+- data volume
+
+    Data Volume本质上是Docker Host文件系统中的目录或文件,能够直接被mount到容器的文件系统中.Data Volume有以下特点:
+
+    1. Data Volume是目录或文件,而非没有格式化的磁盘(块设备)
+    2. 容器可以读写volume中的数据
+    3. volume数据可以被永久的保存,即使使用它的容器已经销毁
+
+    在具体的使用上,docker提供了两种类型的volume:bind mount和docker managed volume
+
+    - bind mount
+
+        bind mount是将host上已存在的目录或文件mount到容器
+
+            docker run -d -p 80:80 -v ~/htdocs:/usr/local/apache2/htdocs:ro httpd
+
+        bind mount默认可读写,容器销毁对bind mount没有影响
+
+        bind mount的使用直观高效,但是由于需要指定host的特定路径,限制了容器的可移植性
+
+    - docker managed volume
+
+        docker managed volume与bind mount在使用上的最大区别是不需要指定mount源,指明mount point就行了
+
+            docker run -d -p 80:80 -v /usr/local/apache2/htdocs:ro httpd
+
+        data volume的具体位置可以通过docker inspect命令找到,默认在/var/lib/docker/volumes目录下
+
+        docker managed volume的创建过程:
+
+        1. 容器启动时,简单的告诉docker"我需要一个volume存放数据,帮我mount到目录/abc"
+        2. docker在/var/lib/docker/volumes中生成一个随机目录作为mount源
+        3. 如果/abc已经存在,则将数据复制到mount源
+        4. 将volume mount到/abc
+
+        除了docker inspect,也可以通过docker volume命令查看volume的信息
+
+    两种data volume的对比:
+
+    1. 相同点:两者都是host文件系统的某个路径
+    2. 不同点:
+
+    | | bind mount | docker managed volume |
+    :-: | :-: | :-:
+    | volume 位置 | 可任意指定 | /var/lib/docker/volumes/... |
+    | 对已有mount point影响 | 隐藏并替换为 volume | 原有数据复制到volume |
+    | 是否支持单个文件 | 支持 | 不支持，只能是目录 |
+    | 权限控制 | 可设置为只读,默认为读写权限 | 无控制，均为读写权限 |
+    | 移植性 | 移植性弱,与 host path 绑定 | 移植性强,无需指定host目录 |
+
+### 共享数据
+
+- 容器与host共享数据
+
+    对于bind mount,直接将要共享的目录mount到容器
+
+    对于docker managed volume,由于volume在容器启动时才生成,所以需要将共享数据拷贝到volume中
+
+        ]# docker cp /home/staight/code inspiring_dubinsky:/home
+
+- 容器间共享数据
+
+    1. 将数据放在bind mount里
+
+        将共享数据放在bind mount中,然后将其mount到多个容器.例如web server集群使用相同的html文件
+
+    2. 使用volume container
+
+        volume container是专门为其他容器提供 volume的容器.它提供的卷可以是bind mount,也可以是docker managed volume
+
+        创建一个volume container,由于不需要运行,所以使用create:
+
+            ]# docker create --name=vc_container -v /home/staight/code:/home -v /usr/local/apache2/htdocs busybox
+
+        其他容器可以通过--volume-from使用vc_container这个volume container
+
+            ]# docker run --name=web1 -d --volumes-from=vc_container -p 80:80 httpd
+            ]# docker run --name=web2 -d --volumes-from=vc_container -p 81:80 httpd
+            ]# curl 127.0.0.1:80
+            ]# curl 127.0.0.1:81
+
+        volume container的优点:
+
+        1. 与bind mount相比,不必为每一个容器指定host path,所有path都在volume container中定义好了,容器只需与volume container关联,实现了容器与host的解耦
+
+        2. 使用volume container的容器其mount point是一致的,有利于配置的规范和标准化,但也带来一定的局限,使用时需要综合考虑
+
+    3. data-packed volume container
+
+        data-packed volume container可以将数据完全放到volume container中,同时又能与其他容器共享
+
+        data-packed volume container的原理是将数据打包到镜像中,然后通过docker managed volume共享
+
+        首先使用Dockerfile构建镜像
+
+            FROM busybox
+            ADD index.html /usr/local/apache2/htdocs/
+            VOLUME /usr/local/apache2/htdocs //因为该目录就是ADD添加的目录,所以会将已有的数据拷贝到volume中
+
+        build新镜像data
+
+            ]# docker build -t data .
+
+        使用新镜像创建data-packed volume container
+
+            ]# docker create --name=vc_data 9d15e05e0f31
+
+        因为在Dockerfile中已经使用了VOLUME指令,这里就不需要指定volume的mount point了.启动httpd容器并使用 data-packed volume container
+
+            ]# docker run -d --volumes-from=vc_data -p 80:80 httpd
+            ]# curl 127.0.0.1
+
+        data-packed volume container是自包含的,不依赖host提供数据,具有很强的移植性,非常适合只使用静态数据的场景,比如应用的配置信息,web server的静态文件等
+
+### volume生命周期管理
+
+- 备份
+
+    因为volume实际上是host文件系统中的目录和文件,所以volume的备份实际上是对文件系统的备份.例如/myregistry
+
+- 恢复
+
+    volume的恢复也很简单,如果数据损坏了,直接用之前备份的数据拷贝到/myregistry就可以了
+
+- 迁移
+
+    如果我们想使用更新版本的Registry,这就涉及到数据迁移.方法是:
+
+    1. docker stop当前Registry容器
+    2. 启动新版本容器并mount原有volume
+
+- 销毁
+
+    可以删除不再需要的volume,但一定要确保知道自己正在做什么,volume删除后数据是找不回来的
+
+    docker不会销毁bind mount,删除数据的工作只能由host负责.对于docker managed volume,在执行docker rm删除容器时可以带上-v参数,docker会将容器使用到的volume一并删除,但前提是没有其他容器mount该volume,目的是保护数据
+
+    如果删除容器时没有带-v参数,就会产生孤儿volume.这样的话可以使用docker volume子命令对其进行批量删除
