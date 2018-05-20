@@ -4,6 +4,7 @@
 
 - [docker基础](#docker基础)
     - [安装docker](#安装docker)
+        - [Windows下安装](#windows下安装)
     - [容器概念](#容器概念)
         - [什么是容器](#什么是容器)
         - [为什么需要容器](#为什么需要容器)
@@ -64,6 +65,16 @@ Fedora上的安装方法:
 
         ]# systemctl start docker
         ]# systemctl enable docker
+
+### Windows下安装
+
+1. 在docker官网上下载msi包,并安装
+
+2. 运行compmgmt.msc,在里面"本机使用者和群组"->"群组"的"docker-user"项中添加windows当前用户
+
+3. 运行docker
+
+windows下Docker实现方式参考文章:[Windows Container与Docker](https://blog.csdn.net/gm48mg0m/article/details/55049491)
 
 ## 容器概念
 
