@@ -136,6 +136,7 @@ docker network create [OPTIONS] NETWORK:创建一个网络
     -d, --driver string:管理网络的驱动(默认是bridge)
     --subnet strings:指定网络的网段(x.x.x.x/x格式)
     --gateway strings:指定网络的网关
+    -o, --opt map:视驱动而定的可选的选项,例如:parent=eth0,指定使用的网络接口为eth0
 
 docker network inspect NETWORK [NETWORK...]:展示一个或多个网络的细节
 

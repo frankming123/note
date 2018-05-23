@@ -1,13 +1,12 @@
-# docker多主机
+# docker多主机管理
 
 <!-- TOC -->
 
-- [docker多主机](#docker多主机)
+- [docker多主机管理](#docker多主机管理)
     - [Docker Machine](#docker-machine)
         - [安装Docker Machine](#安装docker-machine)
         - [创建Machine](#创建machine)
         - [管理Machine](#管理machine)
-    - [跨主机网络](#跨主机网络)
 
 <!-- /TOC -->
 
@@ -58,7 +57,7 @@
 
 一般来说,执行远程docker命令需要使用-H指定目标主机的连接字符串,比如:docker -H tcp://192.168.10.11:2376 ps
 
-而Docker Machine则更简单,使用eval $(docker-machine env host1).接下来所有的docker命令都相当于在host1上执行
+而Docker Machine则更简单,使用eval $(docker-machine env host1).接下来所有的docker命令都相当于在host1上执行(需要在docker-machine主机上安装docker客户端)
 
 有用的docker-machine子命令:
 
@@ -66,5 +65,3 @@
 2. config:查看machine的docker daemon配置
 3. stop/start/restart:对machine的操作系统操作,而不是docker daemon
 4. scp:在不同machine之间拷贝文件
-
-## 跨主机网络
