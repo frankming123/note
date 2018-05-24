@@ -14,6 +14,8 @@
         - [macvlan实验环境](#macvlan实验环境)
         - [创建macvlan网络](#创建macvlan网络)
         - [macvlan网络结构分析](#macvlan网络结构分析)
+        - [用sub-interface实现多macvlan网络](#用sub-interface实现多macvlan网络)
+    - [flannel](#flannel)
 
 <!-- /TOC -->
 
@@ -241,4 +243,54 @@ macvlan不依赖Linux Bridge,brctl show可以确认没有创建新的bridge
 
 可见容器的eth0@if2就是host2中eth0通过macvlan虚拟出来的interface.容器的interface直接与主机的网卡连接,这种方案使得容器无需通过NAT和端口映射就能与外网直接通信(只要有网关),在网络上与其他独立主机没有区别
 
+此时,容器的eth0@if2和host2中的eth0可以认为是同一张网卡的不同namespace实现,并没有明显的主次之分.容器的IP可以在外界存活
+
 ![macvlan](images/macvlan.png)
+
+### 用sub-interface实现多macvlan网络
+
+macvlan会独占主机的网卡,也就是说一个网卡只能创建一个macvlan网络,否则会报错.不过好在macvlan也可以连接到sub-interface
+
+VLAN是sub-inteface的一种实现方式,它可以将物理的二层网络划分成多达4094个逻辑网络,这些逻辑网络在二层上隔离
+
+1. 创建VLAN(host2,host3)
+
+        ]# nmcli c add ifname eth0.10 con-name eth0.10 type vlan dev eth0 id 10
+        ]# nmcli c add ifname eth0.20 con-name eth0.20 type vlan dev eth0 id 20
+
+2. 创建macvlan网络(host2,host3)
+
+        ]# docker network create -d macvlan --subnet=192.168.10.0/24 --gateway=192.168.10.1 -o parent=eth0
+        .10 mac_net10
+        ]#docker network create -d macvlan --subnet=192.168.20.0/24 --gateway=192.168.20.1 -o parent=eth0
+        .20 mac_net20
+
+3. 运行容器(host2,host3需要修改IP)
+
+        ]# docker run -itd --name bbox1 --ip=192.168.10.10 --network mac_net10 busybox
+        ]# docker run -itd --name bbox2 --ip=192.168.20.10 --network mac_net20 busybox
+
+    测试ping,可以发现同一macvlan网络可以通信,不同macvlan网络不能通信
+
+    不同macvlan网络在二层隔离,但在三层上不隔离,可以通过路由转发的方法使它们通信
+
+    ![macvlan_subinterface](images/macvlan_subinterface.png)
+
+4. 在host1上创建VLAN10和VLAN20,并设置网关IP
+
+        ]# nmcli c add ifname eth0.10 con-name eth0.10 type vlan dev eth0 id 10 ip4 192.168.10.1/24
+        ]# nmcli c add ifname eth0.20 con-name eth0.20 type vlan dev eth0 id 20 ip4 192.168.20.1/24
+
+5. 添加iptables规则,转发不同VLAN的数据包
+
+        ]# iptables -t nat -A POSTROUTING -o eth0.10 -j MASQUERADE
+        ]# iptables -t nat -A POSTROUTING -o eth0.20 -j MASQUERADE
+
+        ]# iptables -A FORWARD -i eth0.10 -o eth0.20 -j ACCEPT
+        ]# iptables -A FORWARD -i eth0.20 -o eth0.10 -j ACCEPT
+
+    测试ping,发现不同macvlan网段可以ping通
+
+    ![macvlan_subinterface_diff](images/macvlan_subinterface_diff.png)
+
+## flannel
