@@ -14,6 +14,9 @@
         - [nova-scheduler](#nova-scheduler)
             - [调度方式](#调度方式)
         - [nova-compute](#nova-compute)
+            - [通过Driver架构支持多种Hypervisor](#通过driver架构支持多种hypervisor)
+            - [nova-compute的功能](#nova-compute的功能)
+                - [定期向OpenStack报告计算节点的状态](#定期向openstack报告计算节点的状态)
 
 <!-- /TOC -->
 
@@ -376,3 +379,35 @@ nova-scheduler负责接收nova-api的虚机创建请求并对在哪台节点上�
         debug = True
 
 ### nova-compute
+
+nova-compute在计算节点上运行,负责管理节点上的instance
+
+OpenStack对instance的操作,最后都是交给nova-compute来完成的
+
+nova-compute与Hypervisor一起实现OpenStack对instance生命周期的管理
+
+#### 通过Driver架构支持多种Hypervisor
+
+nova-compute通过Driver架构与Hypervisor相配合
+
+Nova Driver的架构示意图:
+
+![nova_driver](images/nova_driver.png)
+
+可以在nova/virt目录下查看到支持的Hypervisor的Driver
+
+某个特定的计算节点只会运行一种Hypervisor,只需在该节点nova-compute的配置文件/etc/nova/nova.conf中配置所对应的compute_driver就可以了
+
+    [DEFAULT]
+    compute_driver = libvirt.LibvirtDriver
+
+#### nova-compute的功能
+
+nova-compute的功能可以分为两类:
+
+1. 定期向OpenStack报告计算节点的状态
+2. 实现instance生命周期的管理
+
+##### 定期向OpenStack报告计算节点的状态
+
+nova-scheduler的很多Filter是根据计算节点的资源使用情况过滤的.而这些资源如vCPU,内存,磁盘等信息则都是nova-compute报告的

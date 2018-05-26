@@ -16,6 +16,8 @@
         - [macvlan网络结构分析](#macvlan网络结构分析)
         - [用sub-interface实现多macvlan网络](#用sub-interface实现多macvlan网络)
     - [flannel](#flannel)
+        - [flannel实验环境](#flannel实验环境)
+            - [安装配置etcd](#安装配置etcd)
 
 <!-- /TOC -->
 
@@ -294,3 +296,21 @@ VLAN是sub-inteface的一种实现方式,它可以将物理的二层网络划分
     ![macvlan_subinterface_diff](images/macvlan_subinterface_diff.png)
 
 ## flannel
+
+flannel是CoreOS开发的容器解决方案.flannel为每个host分配一个subnet,容器从此subnet中分配IP,这些IP可以在host间路由,容器间无需NAT和port mapping就可以跨主机通信
+
+每个subnet都是从一个更大的IP池中划分的,flannel会在每个主机上运行一个叫flanneld的agent,其职责是从池子中分配subnet
+
+为了在各个主机间共享信息,flannel用etcd(与consul类似的key-value分布式数据库)存放网络配置,已分配的subnet,host的IP等信息
+
+数据包如何在主机间转发是由backend实现的.flannel提供了多种backend,最常用的有vxlan和host-gw
+
+### flannel实验环境
+
+host1:192.168.122.10,etcd
+host2:192.168.122.20,flannel
+host3:192.168.122.30,flannel
+
+#### 安装配置etcd
+
+在
