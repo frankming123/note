@@ -17,7 +17,25 @@
         - [用sub-interface实现多macvlan网络](#用sub-interface实现多macvlan网络)
     - [flannel](#flannel)
         - [flannel实验环境](#flannel实验环境)
-            - [安装配置etcd](#安装配置etcd)
+        - [安装配置etcd](#安装配置etcd)
+        - [安装配置flannel](#安装配置flannel)
+        - [在Docker中使用flannel](#在docker中使用flannel)
+        - [flannel的连通与隔离](#flannel的连通与隔离)
+            - [flannel网络连通性](#flannel网络连通性)
+            - [flannel网络隔离](#flannel网络隔离)
+            - [flannel与外网连通性](#flannel与外网连通性)
+        - [使用flannel host-gw backend](#使用flannel-host-gw-backend)
+            - [配置flannel](#配置flannel)
+            - [host-gw与vxlan这两种backend的对比](#host-gw与vxlan这两种backend的对比)
+    - [Weave](#weave)
+        - [weave实验环境](#weave实验环境)
+        - [安装部署weave](#安装部署weave)
+        - [启动weave](#启动weave)
+        - [Weave网络结构](#weave网络结构)
+        - [容器在Weave中的通信与隔离](#容器在weave中的通信与隔离)
+            - [weave网络连通性](#weave网络连通性)
+            - [weave网络隔离](#weave网络隔离)
+        - [Weave与外网的通信](#weave与外网的通信)
 
 <!-- /TOC -->
 
@@ -311,6 +329,371 @@ host1:192.168.122.10,etcd
 host2:192.168.122.20,flannel
 host3:192.168.122.30,flannel
 
-#### 安装配置etcd
+### 安装配置etcd
 
-在
+1. 在<https://github.com/coreos/etcd/releases>找到etcd的最新版本
+
+2. 将etcd,etcdctl复制到/usr/bin目录下
+
+3. 启用etcd
+
+        ]# etcd --listen-client-urls 'http://192.168.122.10:2379' --advertise-client-urls 'http://192.168.122.10:2379'
+
+4. 测试etcd
+
+        ]# etcdctl --endpoints="http://192.168.122.10:2379" set foo "bar"
+        ]# etcdctl --endpoints="http://192.168.122.10:2379" get foo
+
+### 安装配置flannel
+
+1. 在github上下载flannel的可执行文件,也可自己编译
+
+    flannel地址:<github.com/coreos/flannel>
+
+2. 将flannel的可执行文件拷贝到host2和host3
+
+        ]# cp flanneld-amd64 /usr/local/bin
+        ]# chmod u+x /usr/local/bin/flanneld-amd64
+
+3. 在host1上将flannel的网络配置保存到etcd
+
+        ]# vim /etc/flannel-config.json
+        {
+        "Network": "10.2.0.0/16",
+        "SubnetLen": 24,
+        "Backend": {
+            "Type": "vxlan"
+        }
+        }
+
+    1. Network定义该网络的IP池
+    2. SubnetLen指定每个主机分配到的subnet大小为24位,即10.2.x.0/24
+    3. Backend为vxlan,即主机间通过vxlan通信
+
+4. 将配置存入etcd
+
+        ]# etcdctl --endpoints=http://192.168.122.10:2379 set /docker-test/network/config < /etc/flannel-config.json
+
+    /docker-test/network/config是此etcd数据项的key,而flannel-config.json的内容是其value.该key是flanneld的一个启动参数
+
+        ]# etcdctl --endpoints=http://192.168.122.10:2379 get /docker-test/network/config
+        {
+        "Network": "10.2.0.0/16",
+        "SubnetLen": 24,
+        "Backend": {
+            "Type": "vxlan"
+        }
+        }
+
+5. 启动flannel
+
+    在host2和host3上启动flannel
+
+        ]# flanneld-amd64 --etcd-endpoints=http://192.168.122.10:2379 --iface=eth0 --etcd-prefix=/docker-test/network &
+
+    --etcd-endpoints指定etcd url
+    --iface指定主机间数据传输使用的interface
+    --etcd-prefix指定etcd存放flannel网络配置信息的key
+
+6. 观察现象
+
+    host2和host3都会启动一个新的interface:flannel.1,且添加了一条路由,用于不同主机之间通信
+
+    host2上flannel.1的信息:
+
+        ]# ip addr show flannel.1
+        9: flannel.1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1450 qdisc noqueue state UNKNOWN group default
+            link/ether 5a:c4:0f:98:0a:50 brd ff:ff:ff:ff:ff:ff
+            inet 10.2.26.0/32 scope global flannel.1
+            valid_lft forever preferred_lft forever
+
+    host2上配置上了subnet的第一个IP:10.2.26.0
+
+    host2上的路由信息:
+
+        ]# ip route
+        10.2.76.0/24 via 10.2.76.0 dev flannel.1 onlink
+        ...
+
+    ![flannel](images/flannel.png)
+
+### 在Docker中使用flannel
+
+1. 在host2和host3上编辑Docker的systemd配置文件,添加--bip和--mtu,必须与/run/flannel/subnet.env中的FLANNEL_SUBNET和FLANNEL_MTU相一致
+
+        ]# cat /run/flannel/subnet.env
+        FLANNEL_NETWORK=10.2.0.0/16
+        FLANNEL_SUBNET=10.2.26.1/24
+        FLANNEL_MTU=1450
+        FLANNEL_IPMASQ=false
+
+        ]# cat /etc/systemd/system/docker.service.d/10-machine.conf
+        [Service]
+        ... --cluster-advertise=eth0:2376 --bip=10.2.26.1/24 --mtu=1450
+
+2. 重启Docker daemon
+
+        ]# systemctl daemon-reload
+        ]# systemctl restart docker.service
+
+3. 查看现象
+
+    Docker直接将10.2.26.1配置到Linux Bridge docker0上,并添加10.2.26.0/24的路由
+
+        ]# ip addr show docker0
+        8: docker0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1450 qdisc noqueue state UP group default
+            inet 10.2.26.1/24 brd 10.2.26.255 scope global docker0
+
+        ]# ip route
+        10.2.26.0/24 dev docker0 proto kernel scope link src 10.2.26.1
+
+    可见,flannel没有创建新的docker网络,而是直接使用默认的bridge网络.同一主机的容器通过docker0连接,跨主机流量通过flannel.1转发
+
+    ![flannel_config](images/flannel_config.png)
+
+4. 将容器连接到flannel网络
+
+    在host2和host3中运行busybox
+
+        ]# docker run -itd --name bbox1 busybox
+
+    查看bbox1的IP
+
+        ]# ]# docker exec bbox1 ip addr
+        10: eth0@if11: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1450 qdisc noqueue
+            inet 10.2.26.2/24 brd 10.2.26.255 scope global eth0
+
+### flannel的连通与隔离
+
+#### flannel网络连通性
+
+不同网段的bbox1和bbox2可以互相通信,其数据包流向:
+
+1. bbox1与bbox2不是一个subnet,数据包发送给默认网关10.2.26.1(docker0)
+2. 根据host2的路由表,数据包会发给flannel.1
+3. flannel.1将数据包封装成VxLAN,通过eth0发送给host3
+4. host3收到包并解封装,发现数据包目的地址为10.2.76.2,根据路由表将数据包发送给flannel.1,并通过docker0到达bbox2
+
+![flannel_run](images/flannel_run.png)
+
+另外,flannel是没有dns服务的,容器无法通过hostname通信
+
+#### flannel网络隔离
+
+flannel为每个主机分配了独立的subnet,但flannel.1将这些subnet连接起来了,相互之间可以路由.本质上,flannel将各主机上相互独立的docker0容器网络组成了一个互通的大网络,实现了容器跨主机通信.flannel没有提供隔离
+
+#### flannel与外网连通性
+
+因为flannel网络利用的是默认的bridge网络,所以容器与外网的连通方式与bridge网络一样,即:
+
+1. 容器通过docker0 NAT访问外网
+2. 通过主机端口映射,外网可以访问容器
+
+### 使用flannel host-gw backend
+
+flannel支持多种backend,除了之前的vxlan以外,host-gw是另一个backend
+
+与vxlan不同,host-gw不会封装数据包,而是在主机的路由表中创建到其他主机subnet的路由条目,从而实现容器跨主机通信
+
+#### 配置flannel
+
+1. 首先修改flanenl的配置flannel-config.json
+
+        {
+        "Network": "10.2.0.0/16",
+        "SubnetLen": 24,
+        "Backend": {
+            "Type": "host-gw"
+        }
+        }
+
+2. 更新etcd数据库
+
+        ]# etcdctl --endpoints="http://192.168.122.10:2379" set /docker-test/network/config < /etc/flannel-config.json
+
+3. kill掉之前host2和host3上的flannel进程并重启
+
+        ]# pkill -9 flannel
+        ]# flanneld-amd64 --etcd-endpoints=http://192.168.122.10:2379 --iface=eth0 --etcd-prefix=/docker-test/network &
+
+4. 观察现象
+
+    查看host2的路由表,增加了一条到10.2.76.0/24的路由,网关的IP为192.168.122.30
+
+        ]# ip route
+        10.2.76.0/24 via 192.168.122.30 dev eth0
+
+    从/run/flannel/subnet.env可以看到host-gw使用的MTU为1500
+
+        ]# cat /run/flannel/subnet.env
+        FLANNEL_NETWORK=10.2.0.0/16
+        FLANNEL_SUBNET=10.2.26.1/24
+        FLANNEL_MTU=1500
+        FLANNEL_IPMASQ=false
+
+    因此需要修改docker启动参数--mtu=1500并重启docker daemon
+
+#### host-gw与vxlan这两种backend的对比
+
+1. host-gw把每个主机都配置成网关,主机知道其他主机的subnet和转发地址.vxlan则在主机间建立隧道,不同主机的容器都在一个大的网段内(比如10.2.0.0/16)
+2. 虽然vxlan与host-gw使用不同的机制建立主机之间连接,但对于容器则无需任何改变,bbox1仍然可以与bbox2通信
+3. 由于vxlan需要对数据进行额外打包和拆包,性能会稍逊于host-gw
+
+## Weave
+
+weave是Weaveworks开发的容器网络解决方案.weave创建的虚拟网络可以将部署在多个主机上的容器连接起来
+对容器来说,weave就像一个巨大的以太网交换机,所有容器都被接入这个交换机,容器可以直接通信,无需NAT和端口映射.除此之外,weave的DNS模块使容器可以通过hostname访问
+
+### weave实验环境
+
+weave不依赖分布式数据库交换网络信息,每个主机上只需运行weave组件就能建立跨主机容器网络
+
+host2:192.168.122.20,weave
+host3:192.168.122.30,weave
+
+### 安装部署weave
+
+weave安装非常简单,在host2和host3上执行如下命令:
+
+    ]# wget https://github.com/weaveworks/weave/releases/download/v2.3.0/weave -O /usr/local/bin/weave
+    ]# chmod +x /usr/local/bin/weave
+
+### 启动weave
+
+下载的weave实际上是一个shell脚本,它会根据调用的参数执行对应的命令
+
+在host2上执行weave launch命令,启动weave相关服务.weave的所有组件都是以容器方式运行的,weave会从docker hub上下载最新的image并启动容器
+
+![weave_start](images/weave_start.png)
+
+weave运行了三个容器:
+
+1. weave是主程序,负责建立weave网络,收发数据,提供DNS服务等
+2. weaveplugin是libnetwork CNM driver,实现Docker网络
+3. weaveproxy提供Docker命令的代理服务,当用户运行Docker CLI创建容器时,它会自动将容器添加到weave网络
+
+weave会创建一个新的Docker网络weave,driver为weavemesh,IP范围是10.32.0.0/12
+
+    ]# docker network inspect weave
+    "Name": "weave",
+    "Scope": "local",
+    "Driver": "weavemesh",
+    "IPAM": {
+        "Driver": "weavemesh",
+        "Options": null,
+        "Config": [
+            {
+                "Subnet": "10.32.0.0/12"
+            }
+        ]
+    },
+    ...
+
+在host2中运行容器bbox1:
+
+    ]# eval $(weave env)
+    ]# docker run --name bbox1 -itd busybox
+
+如需恢复之前的环境,可执行eval $(weave env --restore)
+
+### Weave网络结构
+
+查看容器bbox1的网络配置:
+
+    ]# docker exec bbox1 ip addr
+    1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue qlen 1000
+        inet 127.0.0.1/8 scope host lo
+    17: eth0@if18: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1500 qdisc noqueue 
+        inet 10.2.26.2/24 brd 10.2.26.255 scope global eth0
+    19: ethwe@if20: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1376 qdisc noqueue 
+        inet 10.32.0.1/12 brd 10.47.255.255 scope global ethwe
+
+bbox1有两个网络接口eth0和ethwe,其中eth0连接的是默认bridge网络,即网桥docker0
+
+ethwe与vethwepl3486是一对veth pair,且挂在host上的Linux Bridge weave上
+
+    ]# brctl show
+    bridge name     bridge id               STP enabled     interfaces
+    docker0         8000.024209d5424c       no              vethcd94202
+    virbr0          8000.5254007ecfc2       yes             virbr0-nic
+    weave           8000.bee6904b3172       no              vethwe-bridge
+                                                            vethwepl3486
+
+除了vethwepl3486,weave还挂了一个vethwe-bridge,它和vethwe-datapath是一对veth pair
+
+    ]# ip -d link show
+    15: vethwe-bridge@vethwe-datapath: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue master weave state UP mode DEFAULT group default
+    veth
+    bridge_slave
+    14: vethwe-datapath@vethwe-bridge: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue master datapath state UP mode DEFAULT group default
+    veth
+    openvswitch_slave
+    9: datapath: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    openvswitch
+    16: vxlan-6784: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 65520 qdisc noqueue master datapath state UNKNOWN mode DEFAULT group default qlen 1000
+    vxlan id 0 srcport 0 0 dstport 6784 nolearning ageing 300 udpcsum noudp6zerocsumtx udp6zerocsumrx external
+    openvswitch_slave
+
+可以看到,这里出现了多个新的interface:
+
+1. vethwe-bridge与vethwe-datapath是veth pair
+2. vethwe-datapath的父设备(master)是datapath
+3. datapath是一个openvswitch
+4. vxlan-6784是vxlan interface,其master也是datapath,weave主机间是过VxLAN通信的
+
+![weave_arch](images/weave_arch.png)
+
+weave网络包含两个虚拟交换机:Linux bridge weave 和Open vSwitch datapath,veth pair vethwe-bridge和vethwe-datapath将二者连接在一起.weave和datapath分工不同,weave负责将容器接入weave网络,datapath负责在主机间VxLAN隧道中并收发数据
+
+再在host2上运行容器bbox2
+
+weave DNS为容器bbox2创建了默认域名bbox2.weave.local,bbox1能够直接通过hostname与bbox1通信
+
+    ]# docker exec bbox2 hostname
+    bbox2.weave.local
+    ]# docker exec bbox2 ping -c1 bbox1
+    PING bbox1 (10.32.0.1): 56 data bytes
+    64 bytes from 10.32.0.1: seq=0 ttl=64 time=0.060 ms
+
+![weave_host2_bbox12](images/weave_host2_bbox12.png)
+
+### 容器在Weave中的通信与隔离
+
+在host3上执行如下命令(注意清空原来weave容器与网络):
+
+    ]# weave launch 192.168.122.20
+
+这里需要指定host2的IP地址,这样host2和host3才能加入到同一个weave网络
+
+运行容器bbox3:
+
+    ]# eval $(weave env)
+    ]# docker run -itd --name bbox3 busybox
+
+#### weave网络连通性
+
+bbox3能够直接ping bbox1和bbox2
+
+    ]# docker exec bbox3 ping -c1 bbox1
+    PING bbox1 (10.32.0.1): 56 data bytes
+    64 bytes from 10.32.0.1: seq=0 ttl=64 time=2.563 ms
+
+bbox1,bbox2,bbox3的IP位于同一个subnet10.32.0.0/12.通过host2和host3之间的VxLAN隧道,这三个容器逻辑上是在同一个LAN中,所以能直接通信
+
+bbox3 ping bbox1的数据流向:
+
+![weave_bbox3_ping_bbox1](images/weave_bbox3_ping_bbox1.png)
+
+#### weave网络隔离
+
+默认配置下,weave使用一个大subnet(例如10.32.0.0/12),所有主机的容器都从这个地址空间中分配IP,因为同属一个subnet,容器可以直接通信.如果要实现网络隔离,可以通过环境变量WEAVE_CIDR为容器分配不同subnet的IP
+
+    ]# docker run -e WEAVE_CIDR=net:10.32.2.0/24 -it busybox
+
+这里WEAVE_CIDR=net:10.32.2.0/24的作用是使容器配置到IP 10.32.2.2.由于10.32.0.0/12与10.32.2.0/24位于不同的subnet,所以无法ping到bbox1
+
+除了subnet,我们还可以直接分配特定的IP
+
+    ]# docker run -e WEAVE_CIDR=ip:10.32.6.6/24 -it busybox
+
+### Weave与外网的通信
