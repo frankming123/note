@@ -126,10 +126,10 @@
 
 ## 日志
 
-    OpenStack排查问题的方法主要是通过日志
+OpenStack排查问题的方法主要是通过日志
 
-    每个Service都有自己的日志文件
+每个Service都有自己的日志文件
 
-    Keystone主要有两个日志:keystone.log和keystone_access.log,保存在 /var/log/httpd目录下
+Keystone主要有两个日志:keystone.log和keystone_access.log,保存在 /var/log/httpd目录下
 
-    如果需要得到最详细的日志信息,可以在/etc/keystone/keystone.conf中打开debug选项
+如果需要得到最详细的日志信息,可以在/etc/keystone/keystone.conf中打开debug选项

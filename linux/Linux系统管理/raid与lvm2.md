@@ -231,12 +231,14 @@ LVM方式:
     lvremove /dev/VG_NAME/LV_NAME
 
 - 扩展逻辑卷:
+
     lvextend -L [+]#[mMgGtT] /dev/VG_NAME/LV_NAME
     resize2fs /dev/VG_NAME/LV_NAME
 
     注意:扩展后需要让系统识别,xfs_growfs,resize2fs dev_name
 
 - 缩减逻辑卷:
+
     umount /dev/VG_NAME/LV_NAME
     e2fsck -f /dev/VG_NAME/LV_NAME
     resize2fs /dev/VG_NAME/LV_NAME #[mMgGtT]
@@ -244,4 +246,5 @@ LVM方式:
     mount
 
 - 快照:snapshot
+
     lvcreate -L [-]#[mMgGtT] -p r -s -n snapshot_lv_name original_lv_name
