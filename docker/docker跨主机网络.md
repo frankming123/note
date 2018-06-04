@@ -36,6 +36,10 @@
             - [weave网络连通性](#weave网络连通性)
             - [weave网络隔离](#weave网络隔离)
         - [Weave与外网的通信](#weave与外网的通信)
+            - [将主机加入到weave网关](#将主机加入到weave网关)
+            - [让其他非weave主机访问到weave容器](#让其他非weave主机访问到weave容器)
+            - [IPAM](#ipam)
+    - [Calico](#calico)
 
 <!-- /TOC -->
 
@@ -697,3 +701,55 @@ bbox3 ping bbox1的数据流向:
     ]# docker run -e WEAVE_CIDR=ip:10.32.6.6/24 -it busybox
 
 ### Weave与外网的通信
+
+weave是一个私有的VxLAN网络,默认与外部网络隔离
+
+如果外部网络想要访问到weave,则需要:
+
+1. 将主机加入到weave网关
+2. 把主机当做访问weave网络的网关
+
+#### 将主机加入到weave网关
+
+要将主机加入到weave,执行weave expose
+
+    ]# weave expose
+    10.32.0.1
+
+这时,这个IP10.32.0.1会被配置到host2的weave网络上
+
+    ]# ip addr show weave
+    8: weave: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue state UP group default qlen 1000
+        inet 10.32.0.1/12 brd 10.47.255.255 scope global weave
+
+此时host2的网络结构:
+
+![weave_out_to_in](images/weave_out_in.png)
+
+weave网桥位于root namespace,它负责将容器接入weave网络.给weave配置同一subnet的IP其本质就是将host2接入weave网络.host2现在已经可以直接与同一weave网络中的容器通信了,无论容器是否位于host2
+
+在host2中ping同一主机的bbox1:
+
+    ]# ping -c1 10.32.0.2
+    PING 10.32.0.2 (10.32.0.2) 56(84) bytes of data.
+    64 bytes from 10.32.0.2: icmp_seq=1 ttl=64 time=0.036 ms
+
+在host2中ping位于host3的bbox3:
+
+    ]# ping -c1 10.44.0.0
+    PING 10.44.0.0 (10.44.0.0) 56(84) bytes of data.
+    64 bytes from 10.44.0.0: icmp_seq=1 ttl=64 time=0.228 ms
+
+#### 让其他非weave主机访问到weave容器
+
+若想要其他非weave主机访问到box1和bbox3,如host1,只需在host1上添加到容器的路由
+
+    ]# ip route add 10.32.0.0/12 via 192.168.122.20
+
+#### IPAM
+
+10.32.0.0/12是weave网络使用的默认subnet,如果此地址空间与现有IP冲突,可以通过--ipalloc-range分配特定的subnet
+
+    ]# weave launch --ipalloc-range 10.2.0.0/16
+
+## Calico

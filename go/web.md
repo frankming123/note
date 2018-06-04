@@ -7,6 +7,12 @@
     - [beego](#beego)
         - [beego简单示例](#beego简单示例)
         - [bee工具使用](#bee工具使用)
+        - [beego中的模板](#beego中的模板)
+            - [模板目录](#模板目录)
+            - [模板标签](#模板标签)
+            - [模板数据](#模板数据)
+            - [模板条件](#模板条件)
+            - [模板名称](#模板名称)
 
 <!-- /TOC -->
 
@@ -138,7 +144,6 @@ http.ListenAndServe本质上是在向http.Server结构体传值
         }
     }
 
-
 ## beego
 
 beego是一个快速开发Go应用的HTTP框架,他可以用来快速开发API,Web及后端服务等各种应用,是一个RESTful的框架,主要设计灵感来源于tornado,sinatra和flask这三个框架,但是结合了Go本身的一些特性(interface,struct嵌入等)而设计的一个框架
@@ -187,3 +192,117 @@ bee安装(beego的工具):
 启动web程序
 
     ]# bee run my_web_app
+
+### beego中的模板
+
+beego的模板处理引擎采用的是Go内置的html/template包进行处理
+
+#### 模板目录
+
+beego中,模板目录是views,用户可以将目录放到该目录下
+
+#### 模板标签
+
+Go语言的默认模板采用了{{和}}作为左右标签
+
+可以修改beego.TemplateLeft和beego.TemplateRight字段来改变标签
+
+    beego.TemplateLeft = "<<<"
+    beego.TemplateRight = ">>>"
+
+#### 模板数据
+
+模板中的数据是通过在Controller中this.Data获取的
+
+例如获取模板的内容{{.Content}}:
+
+    this.Data["Content"] = "value"
+
+使用各种类型的数据渲染:
+
+- 结构体
+
+    结构体结构:
+
+        type A struct{
+            Name string
+            Age  int
+        }
+
+    控制器数据赋值:
+
+        this.Data["a"]=&A{Name:"astaxie",Age:25}
+
+    模板渲染数据:
+
+        the username is {{.a.Name}}
+        the age is {{.a.Age}}
+
+- map
+
+    控制器数据赋值:
+
+        mp["name"]="astaxie"
+        mp["nickname"] = "haha"
+        this.Data["m"]=mp
+
+    模板渲染数据:
+
+        the username is {{.m.name}}
+        the username is {{.m.nickname}}
+
+- slice
+
+    控制器数据赋值:
+
+        ss :=[]string{"a","b","c"}
+        this.Data["s"]=ss
+
+    模板渲染数据:
+
+        {{range $key, $val := .s}}
+        {{$key}}
+        {{$val}}
+        {{end}}
+
+#### 模板条件
+
+有如下模板条件,用于为模板数据设置条件
+
+- if_else
+
+    模板渲染:
+
+        {{if .TrueCond}}
+        true condition.
+        {{else}}
+        false condition
+        {{end}}
+
+    其中else块可以省略
+
+- with
+
+    如果多个数据都是同一个map或结构体的字段,那么可以将它们归类于with语句中
+
+    模板渲染:
+
+        {{with .User}}
+        {{.Name}};{{.Age}};{{.Sex}}
+        {{end}}
+
+- range
+
+    range可以迭代数组或切片的每个元素
+
+    模板渲染:
+
+        {{range $i := .Nums}}
+        {{$i}}
+        {{end}}
+
+#### 模板名称
+
+用户通过在Controller的对应方法中设置相应的模板名称,beego会自动的在viewpath目录下查询该文件并渲染
+
+    this.TplName = "admin/add.tpl"
