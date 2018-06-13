@@ -40,6 +40,14 @@
             - [让其他非weave主机访问到weave容器](#让其他非weave主机访问到weave容器)
             - [IPAM](#ipam)
     - [Calico](#calico)
+        - [Calico实验环境](#calico实验环境)
+            - [启动etcd](#启动etcd)
+    - [跨主机网络选择](#跨主机网络选择)
+        - [网络模型](#网络模型)
+        - [Distributed Store](#distributed-store)
+        - [网络IPAM](#网络ipam)
+        - [网络连通与隔离](#网络连通与隔离)
+        - [性能](#性能)
 
 <!-- /TOC -->
 
@@ -753,3 +761,110 @@ weave网桥位于root namespace,它负责将容器接入weave网络.给weave配�
     ]# weave launch --ipalloc-range 10.2.0.0/16
 
 ## Calico
+
+Calico是一个纯三层的虚拟网络方案,Calico为每个容器分配一个IP,每个host都是router,把不同host的容器连接起来.与VxLAN不同的是,Calico不对数据包做额外封装,不需要NAT和端口映射,扩展性和性能都很好
+
+与其他容器网络方案相比,Calico还有一大优势:network policy.用户可以动态定义ACL规则,控制进出容器的数据包,实现业务需求
+
+注:Calico3.0开始不支持在Docker下部署,必须使用k8s
+
+### Calico实验环境
+
+host1:192.168.122.10,etcd
+host2:192.168.122.20,Calico
+host3:192.168.122.30,Calico
+
+Calico依赖etcd在不同主机间共享和交换信息,存储Calico网络状态
+
+Calico网络中的每个主机都要运行Calico组件,提供容器interface管理,动态路由,动态ACL,报告状态等功能
+
+实验环境如图:
+
+![Calico_environment](images/Calico_environment.png)
+
+#### 启动etcd
+
+在host1上启动etcd:
+
+    etcd --listen-client-urls http://192.168.122.10:2379 --advertise-client-urls http://192.168.122.10:2379
+
+修改host2和host3的Docker Daemon配置文件,连接etcd:
+
+    ]# vim /etc/systemd/system/docker.service.d/10-machine.conf
+    [Service]
+    ... --cluster-store=etcd://192.168.122.10:2379
+
+重启Docker Daemon:
+
+    ]# systemctl daemon-reload
+    ]# systemctl restart docker
+
+## 跨主机网络选择
+
+Docker的跨主机网络已经涌现出多种优秀的解决方案,不过没有最好的,只有最适合的
+
+可根据不同场景选择最适合的方案:
+
+1. 网络模型:采用何种模型支持multi-host网络
+2. Distributed Store:是否需要etcd或consul这类分布式key-value数据库存储网络信息
+3. IPMA:如何管理容器网络的IP
+4. 连通和隔离:提供怎样的网络连通性,支持容器间哪个级别和哪个类型的隔离
+5. 性能:性能比较
+
+### 网络模型
+
+跨主机网络意味着将不同主机上的容器用同一个虚拟网络连接起来.这个虚拟网络的拓扑结构和实现技术就是网络模型
+
+Docker overlay如名称所示,是overlay网络,建立主机间VxLAN隧道,原始数据包在发送端被封装成VxLAN数据包,到达目的后在接收端解包
+
+Macvlan网络在二层上通过VLAN连接容器,在三层上依赖外部网关连接不同macvlan.数据包直接发送,不需要封装,属于underlay网络
+
+Flannel我们讨论了两种backend:vxlan和host-gw.vxlan与Docker overlay类似,属于overlay网络.host-gw将主机作为网关,依赖三层IP转发,不需要像vxlan那样对包进行封装,属于 underlay 网络
+
+Weave是 VxLAN 实现,属于overlay网络
+
+各方案的网络模型描述如下:
+
+![Network_Model](images/Network_Model.png)
+
+### Distributed Store
+
+Docker Overlay,Flannel和Calico都需要etcd或consul.Macvlan是简单的local网络,不需要保存和共享网络信息.Weave自己负责在主机间交换网络配置信息,也不需要Distributed Store
+
+![Distributed_Store](images/Distributed_Store.png)
+
+### 网络IPAM
+
+Docker Overlay网络中所有主机共享同一个subnet,容器启动时会顺序分配IP,可以通过--subnet定制此IP空间
+
+Macvlan需要用户自己管理subnet,为容器分配IP,不同subnet通信依赖外部网关
+
+Flannel为每个主机自动分配独立的subnet,用户只需要指定一个大的IP池.不同subnet之间的路由信息也由Flannel自动生成和配置
+
+Weave的默认配置下所有容器使用10.32.0.0/12 subnet,如果此地址空间与现有IP冲突,可以通过--ipalloc-range 分配特定的subnet
+
+Calico从IP Pool(可定制)中为每个主机分配自己的subnet
+
+![IPAM](images/IPAM.png)
+
+### 网络连通与隔离
+
+同一Docker Overlay网络中的容器可以通信,但不同网络之间无法通信,要实现跨网络访问,只有将容器加入多个网络.与外网通信可以通过docker_gwbridge网络
+
+Macvlan网络的连通或隔离完全取决于二层VLAN和三层路由
+
+不同Flannel网络中的容器直接就可以通信,没有提供隔离.与外网通信可以通过bridge网络
+
+Weave网络默认配置下所有容器在一个大的subnet中,可以自由通信,如果要实现隔离,需要为容器指定不同的subnet或IP.与外网通信的方案是将主机加入到weave网络,并把主机当作网关
+
+Calico默认配置下只允许位于同一网络中的容器之间通信,但通过其强大的Policy能够实现几乎任意场景的访问控制
+
+### 性能
+
+性能测试是一个非常严谨和复杂的工程,这里我们只尝试从技术方案的原理上比较各方案的性能
+
+最朴素的判断是:Underlay网络性能优于Overlay网络
+
+Overlay网络利用隧道技术,将数据包封装到UDP中进行传输.因为涉及数据包的封装和解封,存在额外的CPU和网络开销.虽然几乎所有Overlay网络方案底层都采用Linux kernel的vxlan模块,这样可以尽量减少开销,但这个开销与Underlay网络相比还是存在的.所以Macvlan,Flannel host-gw,Calico的性能会优于Docker overlay,Flannel vxlan和Weave
+
+Overlay较Underlay可以支持更多的二层网段,能更好地利用已有网络,以及有避免物理交换机MAC表耗尽等优势,所以在方案选型的时候需要综合考虑

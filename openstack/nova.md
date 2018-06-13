@@ -17,6 +17,7 @@
             - [通过Driver架构支持多种Hypervisor](#通过driver架构支持多种hypervisor)
             - [nova-compute的功能](#nova-compute的功能)
                 - [定期向OpenStack报告计算节点的状态](#定期向openstack报告计算节点的状态)
+            - [实现instance生命周期的管理](#实现instance生命周期的管理)
 
 <!-- /TOC -->
 
@@ -410,4 +411,14 @@ nova-compute的功能可以分为两类:
 
 ##### 定期向OpenStack报告计算节点的状态
 
-nova-scheduler的很多Filter是根据计算节点的资源使用情况过滤的.而这些资源如vCPU,内存,磁盘等信息则都是nova-compute报告的
+nova-scheduler的很多Filter是根据计算节点的资源使用情况过滤的.而这些资源如vCPU,内存,磁盘等信息则都是nova-compute报告的.这些信息记录在/opt/stack/logs/n-cpu.log
+
+nova-compute可以通过Hypervisor的driver拿到这些信息.例如Hypervisor是KVM,则用的Driver是LibvirtDriver
+
+#### 实现instance生命周期的管理
+
+OpenStack对instance最主要的操作都是通过nova-compute实现的,包括instance的launch,shutdown,reboot,suspend,resume,terminate,resize,migration,snapshot等
+
+当nova-scheduler选定了部署instance的计算节点后,会通过消息中间件rabbitMQ向选定的计算节点发出launch instance的命令
+
+该计算节点上运行的nova-compute收到消息后会执行instance创建操作
