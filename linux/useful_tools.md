@@ -7,6 +7,7 @@
     - [cobbler](#cobbler)
     - [deepin-wine-tim](#deepin-wine-tim)
     - [frp](#frp)
+    - [vysor](#vysor)
 
 <!-- /TOC -->
 
@@ -25,3 +26,13 @@
 frp的全称为fast reverse proxy,是一个可用于内网穿透的高性能的反向代理应用,支持tcp,udp,http和https协议
 
 frp的github地址:<https://github.com/fatedier/frp/>
+
+## vysor
+
+vysor是一款手机投屏软件,它可以将通过usb连接的手机(只能安卓?)的屏幕连接至电脑,且既有windows版,也有linux版,还有chrome app版
+
+vysor有普通和pro两个版本,chrome app版可以通过修改其源文件使其伪装成pro版
+
+    ]# vim /home/staight/.config/google-chrome/Default/Extensions/gidgenkbbabolejbgbpnhbimgjbffefm/1.9.3_0/uglify.js
+
+查找"Thank"关键字,其上找到var e,t=!1,o=!1并改为var e,t=1,o=1,保存后再次打开vysor,则发现已伪装为pro版
